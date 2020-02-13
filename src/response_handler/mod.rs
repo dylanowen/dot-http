@@ -111,7 +111,7 @@ impl Outputter for DefaultOutputter {
     type Response = DefaultResponse;
 
     fn output_response(&mut self, response: &Self::Response) -> Result<(), Error> {
-        println!("{}", response);
+        eprintln!("{}", response);
 
         let DefaultResponse(Response { body, .. }) = response;
 
@@ -122,7 +122,7 @@ impl Outputter for DefaultOutputter {
     }
 
     fn output_request(&mut self, request: &Request<Processed>) -> Result<(), Error> {
-        println!("{}", request);
+        eprintln!("{}", request);
         Ok(())
     }
 }
