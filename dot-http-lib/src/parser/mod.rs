@@ -1,79 +1,50 @@
-#[cfg(test)]
-pub mod tests;
-
-use crate::Result;
-use pest::error::LineColLocation;
-use pest::iterators::Pair;
-use pest::Parser;
-use pest::Span;
-use serde::export::Formatter;
-use std::error;
 use std::fmt;
 use std::fmt::Display;
 use std::path::PathBuf;
+
+use serde::export::Formatter;
+
+pub use pest::error;
+use pest::iterators::Pair;
+use pest::Parser;
+use pest::Span;
+
+use crate::parser::error::{Error, ErrorVariant};
+
+#[cfg(test)]
+pub mod tests;
 
 #[derive(Parser)]
 #[grammar = "parser/parser.pest"]
 struct ScriptParser;
 
-#[derive(Debug)]
-pub struct Error {
-    pub message: String,
-    pub selection: Selection,
-}
+trait FromPair: Sized {
+    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Result<Self, Error<Rule>>;
 
-impl error::Error for Error {}
-
-impl fmt::Display for Error {
-    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
-        fmt.write_str(self.message.as_str())
+    fn invalid_pair(expected: Rule, got: &Pair<'_, Rule>) -> Result<Self, Error<Rule>> {
+        Err(Error::new_from_span(
+            ErrorVariant::CustomError {
+                message: format!(
+                    "Wrong pair. Expected: {:?}, Got: {:?}",
+                    expected,
+                    got.as_rule()
+                ),
+            },
+            got.as_span(),
+        ))
     }
-}
-
-fn invalid_pair(expected: Rule, got: Rule) -> ! {
-    panic!(format!(
-        "Wrong pair. Expected: {:?}, Got: {:?}",
-        expected, got
-    ))
-}
-
-trait FromPair {
-    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Self;
 }
 
 trait ToSelection {
     fn to_selection(self, filename: PathBuf) -> Selection;
 }
 
-impl ToSelection for LineColLocation {
-    fn to_selection(self, filename: PathBuf) -> Selection {
-        match self {
-            LineColLocation::Pos((line, col)) => Selection {
-                filename,
-                start: Position { line, col },
-                end: Position { line, col },
-            },
-            LineColLocation::Span((start_line, start_col), (end_line, end_col)) => Selection {
-                filename,
-                start: Position {
-                    line: start_line,
-                    col: start_col,
-                },
-                end: Position {
-                    line: end_line,
-                    col: end_col,
-                },
-            },
-        }
-    }
-}
-
 impl FromPair for Handler {
-    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Self {
+    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Result<Self, Error<Rule>> {
         match pair.as_rule() {
-            Rule::response_handler => Handler {
-                selection: pair.as_span().to_selection(filename),
-                script: pair
+            Rule::response_handler => {
+                let selection = pair.as_span().to_selection(filename);
+                let script = pair
                     .into_inner()
                     .find_map(|pair| match pair.as_rule() {
                         Rule::handler_script => Some(
@@ -87,33 +58,40 @@ impl FromPair for Handler {
                         _ => None,
                     })
                     .unwrap()
-                    .to_string(),
-            },
-            _ => invalid_pair(Rule::response_handler, pair.as_rule()),
+                    .to_string();
+
+                Ok(Handler { selection, script })
+            }
+            _ => Self::invalid_pair(Rule::response_handler, &pair),
         }
     }
 }
 
 impl FromPair for Method {
-    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Self {
+    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Result<Self, Error<Rule>> {
         let selection = pair.as_span().to_selection(filename);
         match pair.as_rule() {
             Rule::method => match pair.as_str() {
-                "GET" => Method::Get(selection),
-                "POST" => Method::Post(selection),
-                "DELETE" => Method::Delete(selection),
-                "PUT" => Method::Put(selection),
-                "PATCH" => Method::Patch(selection),
-                "OPTIONS" => Method::Options(selection),
-                _ => panic!(format!("Unsupported method: {}", pair.as_str())),
+                "GET" => Ok(Method::Get(selection)),
+                "POST" => Ok(Method::Post(selection)),
+                "DELETE" => Ok(Method::Delete(selection)),
+                "PUT" => Ok(Method::Put(selection)),
+                "PATCH" => Ok(Method::Patch(selection)),
+                "OPTIONS" => Ok(Method::Options(selection)),
+                _ => Err(pest::error::Error::new_from_span(
+                    ErrorVariant::CustomError {
+                        message: format!("Unsupported method: {}", pair.as_str()),
+                    },
+                    pair.as_span(),
+                )),
             },
-            _ => invalid_pair(Rule::method, pair.as_rule()),
+            _ => Self::invalid_pair(Rule::method, &pair),
         }
     }
 }
 
 impl FromPair for Value {
-    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Self {
+    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Result<Self, Error<Rule>> {
         match (pair.as_rule(), pair.as_str()) {
             (Rule::request_target, string)
             | (Rule::field_value, string)
@@ -123,154 +101,170 @@ impl FromPair for Value {
                     .into_inner()
                     .filter(|pair| pair.as_rule() == Rule::inline_script)
                     .map(|pair| InlineScript::from_pair(filename.clone(), pair))
-                    .collect::<Vec<InlineScript>>();
+                    .collect::<Result<Vec<InlineScript>, Error<Rule>>>()?;
 
                 if !inline_scripts.is_empty() {
-                    Value {
+                    Ok(Value {
                         state: Unprocessed::WithInline {
                             value: string.to_string(),
                             inline_scripts,
                             selection,
                         },
-                    }
+                    })
                 } else {
-                    Value {
+                    Ok(Value {
                         state: Unprocessed::WithoutInline(string.to_string(), selection),
-                    }
+                    })
                 }
             }
-            _ => invalid_pair(Rule::request_target, pair.as_rule()),
+            _ => Self::invalid_pair(Rule::request_target, &pair),
         }
     }
 }
 
 impl FromPair for InlineScript {
-    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Self {
+    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Result<Self, Error<Rule>> {
         match pair.as_rule() {
-            Rule::inline_script => InlineScript {
-                selection: pair.as_span().to_selection(filename),
-                placeholder: pair.as_str().to_string(),
-                script: pair
+            Rule::inline_script => {
+                let selection = pair.as_span().to_selection(filename);
+                let placeholder = pair.as_str().to_string();
+                let script = pair
                     .into_inner()
                     .map(|pair| pair.as_str())
                     .last()
                     .unwrap()
-                    .to_string(),
-            },
-            _ => invalid_pair(Rule::inline_script, pair.as_rule()),
+                    .to_string();
+
+                Ok(InlineScript {
+                    selection,
+                    placeholder,
+                    script,
+                })
+            }
+            _ => Self::invalid_pair(Rule::inline_script, &pair),
         }
     }
 }
 
 impl FromPair for Header {
-    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Self {
+    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Result<Self, Error<Rule>> {
         match pair.as_rule() {
             Rule::header_field => {
                 let selection = pair.as_span().clone().to_selection(filename.clone());
                 let mut pairs = pair.into_inner();
-                Header {
+                let field_name = pairs
+                    .find_map(|pair| match pair.as_rule() {
+                        Rule::field_name => Some(pair.as_str().to_string()),
+                        _ => None,
+                    })
+                    .unwrap();
+                let field_value = pairs
+                    .find_map(|pair| match pair.as_rule() {
+                        Rule::field_value => Some(Value::from_pair(filename.clone(), pair)),
+                        _ => None,
+                    })
+                    .unwrap()?;
+
+                Ok(Header {
                     selection,
-                    field_name: pairs
-                        .find_map(|pair| match pair.as_rule() {
-                            Rule::field_name => Some(pair.as_str().to_string()),
-                            _ => None,
-                        })
-                        .unwrap(),
-                    field_value: pairs
-                        .find_map(|pair| match pair.as_rule() {
-                            Rule::field_value => Some(Value::from_pair(filename.clone(), pair)),
-                            _ => None,
-                        })
-                        .unwrap(),
-                }
+                    field_name,
+                    field_value,
+                })
             }
-            _ => invalid_pair(Rule::header_field, pair.as_rule()),
+            _ => Self::invalid_pair(Rule::header_field, &pair),
         }
     }
 }
 
 impl FromPair for Request {
-    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Self {
+    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Result<Self, Error<Rule>> {
         match pair.as_rule() {
             Rule::request_script => {
                 let selection = pair.as_span().clone().to_selection(filename.clone());
                 let mut pairs = pair.into_inner();
-                Request {
+                let method = pairs
+                    .find_map(|pair| match pair.as_rule() {
+                        Rule::method => Some(Method::from_pair(filename.clone(), pair)),
+                        _ => None,
+                    })
+                    .unwrap()?;
+                let target = pairs
+                    .find_map(|pair| match pair.as_rule() {
+                        Rule::request_target => Some(Value::from_pair(filename.clone(), pair)),
+                        _ => None,
+                    })
+                    .unwrap()?;
+                let headers = pairs
+                    .clone()
+                    .filter_map(|pair| match pair.as_rule() {
+                        Rule::header_field => Some(Header::from_pair(filename.clone(), pair)),
+                        _ => None,
+                    })
+                    .collect::<Result<Vec<Header>, Error<Rule>>>()?;
+                let body = {
+                    let pair = pairs.find_map(|pair| match pair.as_rule() {
+                        Rule::request_body => Some(pair),
+                        _ => None,
+                    });
+
+                    if let Some(pair) = pair {
+                        Some(Value::from_pair(filename, pair)?)
+                    } else {
+                        None
+                    }
+                };
+
+                Ok(Request {
                     selection,
-                    method: pairs
-                        .find_map(|pair| match pair.as_rule() {
-                            Rule::method => Some(Method::from_pair(filename.clone(), pair)),
-                            _ => None,
-                        })
-                        .unwrap(),
-                    target: pairs
-                        .find_map(|pair| match pair.as_rule() {
-                            Rule::request_target => Some(Value::from_pair(filename.clone(), pair)),
-                            _ => None,
-                        })
-                        .unwrap(),
-                    headers: pairs
-                        .clone()
-                        .filter_map(|pair| match pair.as_rule() {
-                            Rule::header_field => Some(Header::from_pair(filename.clone(), pair)),
-                            _ => None,
-                        })
-                        .collect::<Vec<Header>>(),
-                    body: {
-                        let pair = pairs.find_map(|pair| match pair.as_rule() {
-                            Rule::request_body => Some(pair),
-                            _ => None,
-                        });
-                        if let Some(pair) = pair {
-                            Some(Value::from_pair(filename, pair))
-                        } else {
-                            None
-                        }
-                    },
-                }
+                    method,
+                    target,
+                    headers,
+                    body,
+                })
             }
-            _ => invalid_pair(Rule::request_script, pair.as_rule()),
+            _ => Self::invalid_pair(Rule::request_script, &pair),
         }
     }
 }
 
 impl FromPair for RequestScript {
-    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Self {
+    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Result<Self, Error<Rule>> {
         match pair.as_rule() {
             Rule::request_script => {
                 let mut pairs = pair.clone().into_inner();
-                RequestScript {
+                Ok(RequestScript {
                     selection: pair.as_span().to_selection(filename.clone()),
-                    request: Request::from_pair(filename.clone(), pair),
+                    request: Request::from_pair(filename.clone(), pair)?,
                     handler: {
                         let pair = pairs.find_map(|pair| match pair.as_rule() {
                             Rule::response_handler => Some(pair),
                             _ => None,
                         });
                         if let Some(pair) = pair {
-                            Some(Handler::from_pair(filename, pair))
+                            Some(Handler::from_pair(filename, pair)?)
                         } else {
                             None
                         }
                     },
-                }
+                })
             }
-            _ => invalid_pair(Rule::request_script, pair.as_rule()),
+            _ => Self::invalid_pair(Rule::request_script, &pair),
         }
     }
 }
 
 impl FromPair for File {
-    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Self {
+    fn from_pair(filename: PathBuf, pair: Pair<'_, Rule>) -> Result<Self, Error<Rule>> {
         match pair.as_rule() {
-            Rule::file => File {
-                request_scripts: pair
+            Rule::file => {
+                let request_scripts = pair
                     .into_inner()
                     .filter(|pair| pair.as_rule() == Rule::request_script)
                     .map(|pair| RequestScript::from_pair(filename.clone(), pair))
-                    .collect::<Vec<RequestScript>>(),
-            },
-            _ => invalid_pair(Rule::file, pair.as_rule()),
+                    .collect::<Result<Vec<RequestScript>, Error<Rule>>>()?;
+                Ok(File { request_scripts })
+            }
+            _ => Self::invalid_pair(Rule::file, &pair),
         }
     }
 }
@@ -293,15 +287,11 @@ impl ToSelection for Span<'_> {
     }
 }
 
-pub fn parse(filename: PathBuf, source: &str) -> Result<File> {
-    Ok(ScriptParser::parse(Rule::file, source)
-        .map_err(|error| Error {
-            message: error.to_string(),
-            selection: error.line_col.to_selection(filename.clone()),
-        })?
+pub fn parse(filename: PathBuf, source: &str) -> Result<File, Error<Rule>> {
+    ScriptParser::parse(Rule::file, source)?
         .map(|pair| File::from_pair(filename.clone(), pair))
         .last()
-        .unwrap())
+        .unwrap()
 }
 
 impl Display for Value {
