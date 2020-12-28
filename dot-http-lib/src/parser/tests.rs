@@ -116,7 +116,7 @@ POST http://example.com HTTP/1.1
 
 > {% console.log('no'); %}";
 
-    let file = parser::parse(PathBuf::default(), test);
+    let file = parser::parse(test);
     if let Err(e) = &file {
         println!("{:?}", e);
     }
@@ -136,12 +136,12 @@ Accept: */*
 ###
 ";
 
-    let file = parser::parse(PathBuf::default(), test);
+    let file = parser::parse(test);
     if let Err(e) = &file {
         println!("{:?}", e);
     }
 
-    assert!(file.is_ok());
+    file.unwrap();
 }
 
 #[test]
@@ -165,7 +165,7 @@ Accept: */*
 ###
 ";
 
-    let file = parser::parse(PathBuf::default(), test);
+    let file = parser::parse(test);
     if let Err(e) = &file {
         println!("{:?}", e);
     }
@@ -255,7 +255,7 @@ fn mixing_body_and_headers() {
 GET http://example.com HTTP/1.1
 header: some-value";
 
-    let file = parser::parse(PathBuf::default(), test);
+    let file = parser::parse(test);
     if let Err(e) = &file {
         println!("{:?}", e);
     }
@@ -264,6 +264,6 @@ header: some-value";
 
     let request = &file.unwrap().request_scripts[0].request;
 
-    assert!(&request.headers[0].field_name == "header");
+    assert_eq!(&request.headers[0].field_name, "header");
     assert!(&request.body.is_none());
 }

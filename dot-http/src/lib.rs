@@ -79,10 +79,10 @@ impl<'a> Runtime<'a> {
     pub fn execute(&mut self, script_file: &Path, offset: usize, all: bool) -> Result<()> {
         let file = read_to_string(&script_file)
             .with_context(|| format!("Failed opening script file: {:?}", script_file))?;
-        let file = &mut parse(script_file.to_path_buf(), file.as_str())
+        let file = &mut parse(file.as_str())
             .with_context(|| format!("Failed parsing file: {:?}", script_file))?;
 
-        let request_scripts = file.request_scripts(offset, all);
+        let request_scripts = file.request_scripts(offset, all).unwrap();
 
         let engine = &mut *self.engine;
         let outputter = self.outputter.borrow_mut();

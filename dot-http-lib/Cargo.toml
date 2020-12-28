@@ -16,7 +16,9 @@ travis-ci = { repository = "bayne/dot-http" }
 appveyor = { repository = "bayne/dot-http", branch = "master", service = "github" }
 
 [dependencies]
-pest = "2.1.2"
+# Pest has had this change for months but the project hasn't published a new release:
+#   https://github.com/pest-parser/pest/issues/485
+pest = { git = "https://github.com/pest-parser/pest" }
 pest_derive = "2.1.0"
 
 http = "0.2.1"

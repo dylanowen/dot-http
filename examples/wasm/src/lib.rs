@@ -196,10 +196,11 @@ impl DotHttpClient {
             .cast::<HtmlTextAreaElement>()
             .map(|t| t.value())
             .unwrap();
-        let file = dot_http_lib::parser::parse("wasm-example".into(), &code)?;
+        let file = dot_http_lib::parser::parse(&code)?;
 
         let request_scripts = file
             .request_scripts(offset, all)
+            .unwrap()
             .map(Clone::clone)
             .collect();
 
