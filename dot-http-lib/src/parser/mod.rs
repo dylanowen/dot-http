@@ -11,6 +11,8 @@ use pest::Parser;
 use pest::Span;
 
 #[cfg(test)]
+pub mod pest_tests;
+#[cfg(test)]
 pub mod tests;
 
 #[derive(Parser)]
@@ -154,15 +156,28 @@ impl FromPair for Handler {
         let selection: Selection = pair.as_span().into();
         let mut pairs = pair.into_inner();
 
-        let script = pairs
-            .expect_pair(Rule::handler_script, || selection.eoi())?
-            .as_str()
-            .to_string();
+        let handler_script_pair = pairs.expect_pair(Rule::handler_script, || selection.eoi())?;
+        let script = parse_handler(handler_script_pair, selection.clone())?;
 
         pairs.expect_end()?;
 
         Ok(Handler { selection, script })
     }
+}
+
+fn parse_handler(
+    handler_script_pair: Pair<'_, Rule>,
+    selection: Selection,
+) -> Result<String, Error> {
+    let mut pairs = handler_script_pair.into_inner();
+    let script_string = pairs
+        .expect_pair(Rule::handler_script_string, || selection.eoi())?
+        .as_str()
+        .to_string();
+
+    pairs.expect_end()?;
+
+    Ok(script_string)
 }
 
 impl FromPair for Value {

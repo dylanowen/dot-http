@@ -1,8 +1,6 @@
 #[macro_use]
 extern crate anyhow;
 #[macro_use]
-extern crate pest;
-#[macro_use]
 extern crate pest_derive;
 
 use http::Method;
@@ -20,6 +18,8 @@ pub type Result<T> = anyhow::Result<T>;
 pub type Request = http::Request<Option<String>>;
 
 pub type Response = http::Response<Option<String>>;
+
+pub use crate::parser::parse;
 
 pub fn process(engine: &mut dyn ScriptEngine, request: &parser::Request) -> Result<Request> {
     let parser::Request {

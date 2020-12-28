@@ -1,110 +1,21 @@
 use super::*;
 use crate::parser;
 
-#[test]
-fn script_parser_parse() {
-    let test = "\
-# Comment 1
-# Comment 2
-# Comment 3
-GET http://{{host}}.com HTTP/1.1
-Accept: *#/*
-# Commented Header
-Content-Type: {{ content_type }}
-
-{
-    \"fieldA\": \"value1\"
-}
-
-> {%
-    console.log('Success!');
-%}
-
-###
-
-# Request Comment 2
-#
-GET http://example.com/{{url_param}}
-Accept: */*
-
-###
-
-";
-    let files = ScriptParser::parse(Rule::file, test);
-    if let Err(e) = &files {
-        println!("{}", e.to_string());
-    }
-    assert!(files.is_ok());
-
-    let file = files.unwrap().next();
-    let mut request_scripts = file.unwrap().into_inner();
-
-    let request_script = request_scripts.next().unwrap();
-
-    assert_eq!(
-        request_script.as_str(),
-        "\
-GET http://{{host}}.com HTTP/1.1
-Accept: *#/*
-# Commented Header
-Content-Type: {{ content_type }}
-
-{
-    \"fieldA\": \"value1\"
-}
-
-> {%
-    console.log('Success!');
-%}"
-    );
-
-    let mut request_script_parts = request_script.into_inner();
-
-    let method = request_script_parts.next().unwrap();
-
-    assert_eq!(method.as_str(), "GET");
-
-    let request_target = request_script_parts.next().unwrap();
-
-    assert_eq!(request_target.as_str(), "http://{{host}}.com");
-
-    let header_field = request_script_parts.next().unwrap();
-    assert_eq!(header_field.as_str(), "Accept: *#/*");
-    let other_header_field = request_script_parts.next().unwrap();
-    assert_eq!(
-        other_header_field.as_str(),
-        "Content-Type: {{ content_type }}"
-    );
-
-    let request_script = request_scripts.next().unwrap();
-
-    assert_eq!(
-        request_script.as_str(),
-        "\
-GET http://example.com/{{url_param}}
-Accept: */*
-
-"
-    );
-
-    let mut request_script_parts = request_script.into_inner();
-    let _method = request_script_parts.next().unwrap();
-    let _request_target = request_script_parts.next().unwrap();
-    let _header_field = request_script_parts.next().unwrap();
-    let body = request_script_parts.next();
-    assert_eq!(body, None);
-}
-
-#[test]
-fn min_file() {
-    let test = "POST http://example.com HTTP/1.1\n";
-
-    let file = ScriptParser::parse(Rule::file, test);
-    if let Err(e) = &file {
-        println!("{:?}", e);
-    }
-
-    assert!(file.is_ok());
+#[macro_export]
+macro_rules! assert_variant {
+    ($tested_enum:expr, $expected:pat) => {
+        assert_variant!($tested_enum, $expected, ())
+    };
+    ($tested_enum:expr, $expected:pat, $variant_test:expr) => {
+        match $tested_enum {
+            $expected => $variant_test,
+            unexpected => panic!(
+                "Expected {} but found {:?}",
+                stringify!($expected),
+                unexpected
+            ),
+        }
+    };
 }
 
 #[test]
@@ -116,12 +27,39 @@ POST http://example.com HTTP/1.1
 
 > {% console.log('no'); %}";
 
-    let file = parser::parse(test);
-    if let Err(e) = &file {
-        println!("{:?}", e);
-    }
+    let file = parser::parse(test).unwrap();
+    assert_eq!(file.request_scripts.len(), 1);
 
-    assert!(file.is_ok());
+    if let RequestScript {
+        request:
+            Request {
+                method,
+                target,
+                headers,
+                body: Some(body),
+                ..
+            },
+        handler: Some(Handler { script, .. }),
+        ..
+    } = &file.request_scripts[0]
+    {
+        assert_variant!(method, Method::Post(_));
+        assert_variant!(
+            &target.state,
+            Unprocessed::WithoutInline(s, _),
+            assert_eq!(s, "http://example.com")
+        );
+        assert_eq!(headers.len(), 0);
+        assert_variant!(
+            &body.state,
+            Unprocessed::WithoutInline(s, _),
+            assert_eq!(s, "{}\n\n")
+        );
+
+        assert_eq!(script, "console.log('no');");
+    } else {
+        panic!("Expected certain values for our RequestScript but couldn't find them");
+    }
 }
 
 #[test]
@@ -136,12 +74,40 @@ Accept: */*
 ###
 ";
 
-    let file = parser::parse(test);
-    if let Err(e) = &file {
-        println!("{:?}", e);
-    }
+    let file = parser::parse(test).unwrap();
+    assert_eq!(file.request_scripts.len(), 1);
 
-    file.unwrap();
+    if let RequestScript {
+        request:
+            Request {
+                method,
+                target,
+                headers,
+                body: None,
+                ..
+            },
+        handler: Some(Handler { script, .. }),
+        ..
+    } = &file.request_scripts[0]
+    {
+        assert_variant!(method, Method::Post(_));
+        assert_variant!(
+            &target.state,
+            Unprocessed::WithoutInline(s, _),
+            assert_eq!(s, "http://example.com")
+        );
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].field_name, "Accept");
+        assert_variant!(
+            &headers[0].field_value.state,
+            Unprocessed::WithoutInline(s, _),
+            assert_eq!(s, "*/*")
+        );
+
+        assert_eq!(script, "console.log('cool');");
+    } else {
+        panic!("Expected certain values for our RequestScript but couldn't find them");
+    }
 }
 
 #[test]
@@ -157,96 +123,54 @@ Accept: */*
     ]
 }
 
-
 > {%
     console.log('cool');
 %}
 
 ###
 ";
+    let file = parser::parse(test).unwrap();
+    assert_eq!(file.request_scripts.len(), 1);
 
-    let file = parser::parse(test);
-    if let Err(e) = &file {
-        println!("{:?}", e);
+    if let RequestScript {
+        request:
+            Request {
+                method,
+                target,
+                headers,
+                body: Some(body),
+                ..
+            },
+        handler: Some(Handler { script, .. }),
+        ..
+    } = &file.request_scripts[0]
+    {
+        assert_variant!(method, Method::Post(_));
+        assert_variant!(
+            &target.state,
+            Unprocessed::WithoutInline(s, _),
+            assert_eq!(s, "http://example.com")
+        );
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].field_name, "Accept");
+        assert_variant!(
+            &headers[0].field_value.state,
+            Unprocessed::WithoutInline(s, _),
+            assert_eq!(s, "*/*")
+        );
+        assert_variant!(
+            &body.state,
+            Unprocessed::WithoutInline(s, _),
+            assert_eq!(
+                s,
+                "{\n    \"test\": \"a\",\n    \"what\": [\n\n    ]\n}\n\n"
+            )
+        );
+
+        assert_eq!(script, "console.log('cool');");
+    } else {
+        panic!("Expected certain values for our RequestScript but couldn't find them");
     }
-
-    assert!(file.is_ok());
-}
-
-#[test]
-fn request_script() {
-    let test = "\
-GET http://{{host}}.com HTTP/1.1
-Accept: *#/*
-# Commented Header
-Content-Type: {{ content_type }}
-
-{
-    \"fieldA\": {{
-    content_type
-    }}
-}
-
-> {%
-    console.log('Success!');
-%}";
-    let request_script = ScriptParser::parse(Rule::request_script, test);
-    if let Err(e) = &request_script {
-        println!("{}", e.to_string());
-    }
-
-    assert!(request_script.is_ok());
-}
-
-#[test]
-fn request() {
-    let test = "\
-GET http://{{host}}.com HTTP/1.1
-Accept: */*
-Content-Type: {{ content_type }}
-Content-Type2: {{ content_type2 }}
-";
-    let request = ScriptParser::parse(Rule::request, test);
-    if let Err(e) = &request {
-        println!("{:?}", e);
-    }
-
-    assert!(request.is_ok());
-}
-
-#[test]
-fn response_handler() {
-    let test = "\
-> {%
- console.log('hi');
-%}
-";
-    let handler = ScriptParser::parse(Rule::response_handler, test);
-    if let Err(e) = &handler {
-        println!("{:?}", e);
-    }
-
-    assert!(handler.is_ok());
-}
-
-#[test]
-fn response_handler_with_comment() {
-    let test = "\
-POST http://httpbin.org/post
-
-{}
-
-# should be fine > {% %}
-> {%
-  console.log('hi');
-%}
-";
-    let file = ScriptParser::parse(Rule::file, test);
-    if let Err(e) = &file {
-        println!("{:?}", e);
-    }
-
-    assert!(file.is_ok());
 }
 
 #[test]
@@ -255,15 +179,110 @@ fn mixing_body_and_headers() {
 GET http://example.com HTTP/1.1
 header: some-value";
 
-    let file = parser::parse(test);
-    if let Err(e) = &file {
-        println!("{:?}", e);
+    let file = parser::parse(test).unwrap();
+    assert_eq!(file.request_scripts.len(), 1);
+
+    if let RequestScript {
+        request:
+            Request {
+                method,
+                target,
+                headers,
+                body: None,
+                ..
+            },
+        handler: None,
+        ..
+    } = &file.request_scripts[0]
+    {
+        assert_variant!(method, Method::Get(_));
+        assert_variant!(
+            &target.state,
+            Unprocessed::WithoutInline(s, _),
+            assert_eq!(s, "http://example.com")
+        );
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].field_name, "header");
+        assert_variant!(
+            &headers[0].field_value.state,
+            Unprocessed::WithoutInline(s, _),
+            assert_eq!(s, "some-value")
+        );
+    } else {
+        panic!("Expected certain values for our RequestScript but couldn't find them");
+    }
+}
+
+#[test]
+fn multiple_request_scripts() {
+    let test = "\
+POST http://example.com HTTP/1.1
+header: some-value
+
+###
+
+POST http://example.com HTTP/1.1
+
+{}
+
+> {% console.log('no'); %}";
+
+    let file = parser::parse(test).unwrap();
+    assert_eq!(file.request_scripts.len(), 2);
+
+    for request_script in &file.request_scripts {
+        let RequestScript {
+            request: Request { method, target, .. },
+            ..
+        } = request_script;
+        assert_variant!(method, Method::Post(_));
+        assert_variant!(
+            &target.state,
+            Unprocessed::WithoutInline(s, _),
+            assert_eq!(s, "http://example.com")
+        );
     }
 
-    assert!(file.is_ok());
+    if let RequestScript {
+        request: Request {
+            headers,
+            body: None,
+            ..
+        },
+        handler: None,
+        ..
+    } = &file.request_scripts[0]
+    {
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].field_name, "header");
+        assert_variant!(
+            &headers[0].field_value.state,
+            Unprocessed::WithoutInline(s, _),
+            assert_eq!(s, "some-value")
+        );
+    } else {
+        panic!("Expected certain values for our RequestScript but couldn't find them");
+    }
 
-    let request = &file.unwrap().request_scripts[0].request;
-
-    assert_eq!(&request.headers[0].field_name, "header");
-    assert!(&request.body.is_none());
+    if let RequestScript {
+        request:
+            Request {
+                headers,
+                body: Some(body),
+                ..
+            },
+        handler: Some(Handler { script, .. }),
+        ..
+    } = &file.request_scripts[1]
+    {
+        assert_eq!(headers.len(), 0);
+        assert_variant!(
+            &body.state,
+            Unprocessed::WithoutInline(s, _),
+            assert_eq!(s, "{}\n\n")
+        );
+        assert_eq!(script, "console.log('no');");
+    } else {
+        panic!("Expected certain values for our RequestScript but couldn't find them");
+    }
 }
