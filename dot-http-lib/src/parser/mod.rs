@@ -1,8 +1,6 @@
 use std::fmt::Display;
 use std::{error, fmt};
 
-use serde::export::Formatter;
-
 use pest::error::Error as PestError;
 use pest::error::LineColLocation;
 use pest::iterators::Pair;
@@ -278,7 +276,7 @@ impl Error {
 impl error::Error for Error {}
 
 impl fmt::Display for Error {
-    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::PestError(pest_error) => write!(fmt, "{}", pest_error),
             Error::CustomError { message, .. } => write!(fmt, "{}", message),
@@ -332,7 +330,7 @@ impl Into<Selection> for Span<'_> {
 }
 
 impl Display for Value {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.state {
             Unprocessed::WithInline { value, .. } => f.write_str(&value),
             Unprocessed::WithoutInline(value, _) => f.write_str(&value),
